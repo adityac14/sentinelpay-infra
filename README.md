@@ -1,2 +1,212 @@
-# sentinelpay-infra
-Azure infrastructure for the SentinelPay payment risk assessment API, provisioned via Bicep across dev and prod environments. Includes Key Vault, managed identity, centralized monitoring, and GitHub Actions CI/CD.
+# SentinelPay Infra
+
+Azure infrastructure for the [SentinelPay API](https://github.com/adityac14/sentinelpay-core), defined as code using Bicep and deployed through GitHub Actions across two environments. This project streamlines SentinelPay's deployment by provisioning every Azure resource through Infrastructure as Code, the kind of posture a compliance-driven Canadian fintech would actually require.
+
+**Companion project to SentinelPay**, a payment risk assessment REST API inspired by Symcor's Payee Verify product and Canada's Real-Time Rail rollout. This repository provisions the cloud infrastructure SentinelPay runs on.
+
+---
+
+## The Problem
+
+SentinelPay was originally deployed by hand. App Service was provisioned through the Azure Portal, the MongoDB Atlas connection string was pasted into App Service configuration, GitHub Actions deployed the application code, and that was it. It worked, but the deployment process itself lived only in the Portal and in memory.
+
+A Canadian financial institution would not deploy a payment risk service this way. Specifically:
+
+| What was missing | Why it matters in fintech |
+|---|---|
+| **No Infrastructure as Code** | The deployment existed only in the Portal. Rebuilding it required manually retracing clicks, and configuration drift accumulated silently. |
+| **Secrets in App Service config** | Connection strings sat in plain configuration with no rotation story and no access audit trail. |
+| **No dev environment** | Every change went to the same instance the world sees. Nowhere safe to test infrastructure changes. |
+| **Scattered telemetry** | Logs landed in App Service, traces didn't exist, no central place to correlate "the app errored at 2am" with "Key Vault was accessed at 1:59am". |
+| **Manual deployment** | No what-if previews, no approval gates, no automated rollback path. |
+
+This project closes those gaps.
+
+---
+
+## The Solution
+
+A Bicep repository that provisions SentinelPay's infrastructure as code, twice, once for `dev` and once for `prod`, from the same templates with different parameter files. Secrets move into Key Vault, App Service authenticates to it via system-assigned managed identity, and centralized monitoring captures both application telemetry and platform diagnostics. GitHub Actions runs the deployments with OIDC federated credentials, runs `what-if` previews on every pull request, and gates `prod` deployments behind a manual approval.
+
+---
+
+## Architecture
+
+```
+GitHub repo (Bicep + workflows)
+       │
+       ▼
+GitHub Actions
+  ├─ PR: what-if against dev
+  ├─ Merge to main: deploy to dev
+  └─ Manual approval: deploy to prod
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Azure subscription                       │
+├─────────────────────────────┬───────────────────────────────┤
+│   rg-sentinelpay-dev        │   rg-sentinelpay-prod         │
+│   ┌──────────────────┐      │   ┌──────────────────┐        │
+│   │  App Service B1  │      │   │  App Service S1  │        │
+│   │  Managed identity│──┐   │   │  Managed identity│──┐     │
+│   └──────────────────┘  │   │   └──────────────────┘  │     │
+│   ┌──────────────────┐  │   │   ┌──────────────────┐  │     │
+│   │   Key Vault      │◀─┘   │   │   Key Vault      │◀─┘     │
+│   │   (Mongo URI)    │      │   │   (Mongo URI)    │        │
+│   └──────────────────┘      │   └──────────────────┘        │
+│   ┌──────────────────┐      │   ┌──────────────────┐        │
+│   │  App Insights    │      │   │  App Insights    │        │
+│   │  Log Analytics   │      │   │  Log Analytics   │        │
+│   └──────────────────┘      │   └──────────────────┘        │
+└─────────────────────────────┴───────────────────────────────┘
+                              │
+                              ▼
+                      MongoDB Atlas
+                      (external SaaS, shared)
+```
+
+---
+
+## What's in the Repo
+
+```
+sentinelpay-infra/
+├── bicep/
+│   ├── main.bicep                  # Orchestrator, accepts environment param
+│   ├── main.dev.bicepparam         # Dev parameters (B1 SKU, dev naming)
+│   ├── main.prod.bicepparam        # Prod parameters (S1 SKU, prod naming)
+│   └── modules/
+│       ├── app.bicep               # App Service plan + App Service + managed identity
+│       ├── keyvault.bicep          # Key Vault + RBAC role assignment for App Service
+│       └── monitoring.bicep        # Log Analytics workspace + App Insights + diagnostic settings
+├── .github/
+│   └── workflows/
+│       └── infra.yml               # OIDC auth, what-if on PR, deploy on merge, prod approval
+├── docs/
+│   └── architecture.png            # High-resolution architecture diagram
+└── README.md
+```
+
+---
+
+## Cloud Concepts Covered
+
+| Concept | Where it lives in the project |
+|---|---|
+| **Infrastructure as Code** | Bicep modules with parameter files for dev/prod |
+| **Compute** | App Service (Linux, Node.js 22) |
+| **Secrets management** | Key Vault with RBAC, Key Vault references in App Service settings |
+| **Identity & access** | System-assigned managed identity, Key Vault Secrets User role assignment |
+| **Monitoring** | Log Analytics workspace + Application Insights + diagnostic settings on App Service and Key Vault |
+| **CI/CD** | GitHub Actions with OIDC federated credentials, `what-if` on PR, approval gate before prod |
+| **Multi-environment** | Same Bicep, different `.bicepparam` files |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **IaC language** | Bicep |
+| **Cloud platform** | Microsoft Azure |
+| **CI/CD** | GitHub Actions |
+| **Auth to Azure** | OIDC federated credentials (no stored service principal secrets) |
+| **Region** | Canada Central |
+| **Application** | [SentinelPay API](https://github.com/adityac14/sentinelpay-core) (Node.js 22, TypeScript, Express) |
+| **Database** | MongoDB Atlas (Azure-hosted, external to this Bicep) |
+
+---
+
+## Deployment
+
+### Prerequisites
+
+* Azure subscription with permission to create resource groups
+* Azure CLI installed locally (for manual deployments and bootstrapping)
+* A GitHub repository with Actions enabled
+* An Entra ID app registration with federated credentials configured against the GitHub repo
+* A MongoDB Atlas cluster and connection string
+
+### One-time setup
+
+1. Create the Entra ID app registration and configure OIDC trust against this repo
+2. Assign the app registration `Contributor` on the target subscription (or scoped to a resource group)
+3. Store the following as GitHub repository secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+4. Seed the MongoDB connection string into Key Vault manually after the first deploy (the Bicep provisions the vault, the secret value itself is not committed to source)
+
+### Local deployment
+
+**Bash (Linux/macOS/WSL):**
+
+```bash
+# Dev
+az deployment sub create \
+  --location canadacentral \
+  --template-file bicep/main.bicep \
+  --parameters bicep/main.dev.bicepparam
+
+# Prod
+az deployment sub create \
+  --location canadacentral \
+  --template-file bicep/main.bicep \
+  --parameters bicep/main.prod.bicepparam
+```
+
+**PowerShell (Windows):**
+
+```powershell
+# Dev
+az deployment sub create `
+  --location canadacentral `
+  --template-file bicep/main.bicep `
+  --parameters bicep/main.dev.bicepparam
+
+# Prod
+az deployment sub create `
+  --location canadacentral `
+  --template-file bicep/main.bicep `
+  --parameters bicep/main.prod.bicepparam
+```
+
+### Automated deployment
+
+* Open a pull request, GitHub Actions runs `az deployment sub what-if` against dev and posts the diff as a PR comment
+* Merge to `main`, automatic deploy to dev
+* Approve the `prod` environment in the Actions UI, deploy to prod
+
+---
+
+## Design Decisions
+
+A few things this project deliberately does *not* do, and why:
+
+**No VNet or private endpoints.** Adding production-grade networking (private endpoints on Key Vault, VNet integration on App Service, private DNS zones) is a significant scope addition. MongoDB Atlas is an external SaaS that cannot be reached via Azure private endpoint anyway, so the security upside of partial networking is limited. This is the highest-priority item in *what I'd add next*.
+
+**No automated secret rotation.** Rotating the MongoDB connection string requires coordination with MongoDB Atlas's API, which is external to Azure. Out of scope for the current iteration.
+
+**No backup or disaster recovery configuration.** MongoDB Atlas provides its own backup, and App Service is stateless. There's nothing meaningful to back up at the Azure layer for this particular application.
+
+**No custom alerting rules.** Log Analytics and App Insights are provisioned and collecting data, but specific KQL alert rules (failed Key Vault access spikes, latency thresholds, error rate jumps) are out of scope. Adding them is a natural follow-up.
+
+These are not omissions, they are scoped-out items with clear next-step paths.
+
+---
+
+## What I'd Add Next
+
+In rough priority order, ranked by what would move the project closest to a real fintech production posture:
+
+1. **NAT Gateway for stable egress IP.** SentinelPay's MongoDB Atlas allowlist currently has to track App Service outbound IPs, which aren't guaranteed stable. A NAT Gateway with VNet integration gives the App Service a single fixed egress IP, allowlisted once.
+2. **Private endpoint on Key Vault.** Take Key Vault off the public internet entirely. Requires a VNet, private DNS zone, and VNet integration on the App Service.
+3. **KQL-based alert rules.** Failed authentication spikes on Key Vault, latency P95 thresholds on App Service, error rate jumps. Each rule fires an Action Group that emails the on-call.
+4. **Separate Azure subscriptions for dev and prod.** Resource group isolation is fine for now, subscription isolation is the real production boundary.
+5. **Bicep linter and security scanning in CI.** Adding `psrule-rules-azure` or `checkov` would catch misconfigurations before they hit Azure.
+6. **Automated secret rotation.** A Function App on a timer trigger that rotates the MongoDB connection string via Atlas's API and writes the new value into Key Vault.
+
+---
+
+## Author
+
+**Aditya Chattopadhyay**
+* LinkedIn: [linkedin.com/in/aditya-chattopadhyay](https://www.linkedin.com/in/aditya-chattopadhyay/)
+* Related project: [SentinelPay API](https://github.com/adityac14/sentinelpay-core)
