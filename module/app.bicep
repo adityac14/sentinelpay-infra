@@ -167,7 +167,7 @@ resource appService 'Microsoft.Web/sites@2025-03-01' = {
         }
         {
           name: 'DB_NAME'
-          value: 'sentinelpay'
+          value: environment == 'prod' ? 'sentinelpay' : 'sentinelpay_dev'
         }
         {
           // App Service sets this automatically; declaring it makes the
