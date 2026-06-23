@@ -1,0 +1,169 @@
+# =============================================================================
+# SentinelPay Infrastructure - CI/CD Pipeline
+# =============================================================================
+# Deploys SentinelPay's Azure infrastructure via Bicep with OIDC authentication.
+#
+# Workflow:
+#   1. PR opened/updated  → validate Bicep + what-if preview against dev
+#   2. Merge to main      → deploy to dev automatically
+#   3. Manual approval     → deploy to prod (gated by GitHub environment reviewer)
+#
+# Authentication:
+#   Uses OIDC federated credentials. GitHub Actions exchanges a short-lived
+#   identity token for an Azure access token. No service principal secrets
+#   are stored in the repository.
+#
+# Required GitHub secrets (repository level):
+#   AZURE_CLIENT_ID       - Entra ID app registration Application (client) ID
+#   AZURE_TENANT_ID       - Entra ID Directory (tenant) ID
+#   AZURE_SUBSCRIPTION_ID - Azure subscription ID
+# =============================================================================
+
+name: Deploy Infrastructure
+
+on:
+  # Run on PRs targeting main (validate + what-if)
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.bicep'
+      - '**.bicepparam'
+      - '.github/workflows/infra.yml'
+
+  # Run on merge to main (deploy)
+  push:
+    branches: [main]
+    paths:
+      - '**.bicep'
+      - '**.bicepparam'
+      - '.github/workflows/infra.yml'
+
+# Only allow one deployment at a time to prevent race conditions
+# where two deploys try to modify the same Azure resources simultaneously
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false
+
+# OIDC requires this permission to request the identity token from GitHub
+permissions:
+  id-token: write
+  contents: read
+  # Allows the what-if job to post a comment on the PR
+  pull-requests: write
+
+jobs:
+  # ===========================================================================
+  # Job 1: Validate and Preview
+  # Runs on every PR. Compiles the Bicep and runs what-if against dev to show
+  # what would change if the PR were merged.
+  # ===========================================================================
+  validate:
+    name: Validate & What-If Preview
+    runs-on: ubuntu-latest
+    # Only run on PRs, not on push to main
+    if: github.event_name == 'pull_request'
+    environment: dev 
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Validate Bicep
+        run: az bicep build --file main.bicep
+
+      - name: What-If Preview (Dev)
+        run: |
+          az deployment sub what-if \
+            --location canadacentral \
+            --template-file main.bicep \
+            --parameters main.dev.bicepparam \
+            --no-pretty-print > what-if-output.txt 2>&1 || true
+          cat what-if-output.txt
+
+      - name: Post What-If to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('what-if-output.txt', 'utf8');
+            const body = `## What-If Preview (Dev Environment)\n\n\`\`\`\n${output.substring(0, 60000)}\n\`\`\`\n\n*Posted by GitHub Actions*`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  # ===========================================================================
+  # Job 2: Deploy to Dev
+  # Runs only on push to main (after PR is merged). Deploys the Bicep
+  # template to the dev environment automatically.
+  # ===========================================================================
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    # Only run on push to main, not on PRs
+    if: github.event_name == 'push'
+    # GitHub environment provides the OIDC trust boundary. The federated
+    # credential for dev only accepts tokens from this environment.
+    environment: dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Dev
+        run: |
+          az deployment sub create \
+            --location canadacentral \
+            --template-file main.bicep \
+            --parameters main.dev.bicepparam \
+            --name "deploy-dev-${{ github.run_number }}"
+
+  # ===========================================================================
+  # Job 3: Deploy to Prod
+  # Runs after dev succeeds. Waits for manual approval via the GitHub
+  # environment's required reviewer setting before proceeding.
+  # ===========================================================================
+  deploy-prod:
+    name: Deploy to Prod
+    runs-on: ubuntu-latest
+    # Only runs after dev deploy succeeds
+    needs: deploy-dev
+    # The prod environment has a required reviewer configured. GitHub will
+    # pause this job and send an email notification. The deployment proceeds
+    # only after the reviewer approves in the Actions UI.
+    environment: prod
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Prod
+        run: |
+          az deployment sub create \
+            --location canadacentral \
+            --template-file main.bicep \
+            --parameters main.prod.bicepparam \
+            --name "deploy-prod-${{ github.run_number }}"
