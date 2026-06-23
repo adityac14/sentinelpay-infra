@@ -62,6 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     # Only run on PRs, not on push to main
     if: github.event_name == 'pull_request'
+    environment: dev 
 
     steps:
       - name: Checkout code
