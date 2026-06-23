@@ -243,3 +243,19 @@ resource appServiceDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01
     ]
   }
 }
+
+// -----------------------------------------------------------------------------
+// Outputs
+// -----------------------------------------------------------------------------
+
+@description('Default hostname of the App Service. Browse to https://{hostname} to reach SentinelPay.')
+output appServiceHostname string = appService.properties.defaultHostName
+
+@description('Name of the App Service.')
+output appServiceName string = appService.name
+
+@description('Resource ID of the App Service.')
+output appServiceId string = appService.id
+
+@description('Principal ID of the App Service managed identity. Useful for additional role assignments in future modules.')
+output appServicePrincipalId string = appService.identity.principalId

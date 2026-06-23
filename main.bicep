@@ -99,7 +99,7 @@ module keyVault 'modules/keyvault.bicep' = {
     workload: workload
     environment: environment
     location: location
-    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkSpaceId
+    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
     tags: commonTags
   }
 }
@@ -119,7 +119,7 @@ module app 'modules/app.bicep' = {
     appServicePlanSku: appServicePlanSku
     keyVaultName: keyVault.outputs.keyVaultName
     applicationInsightsConnectionString: monitoring.outputs.applicationInsightsConnectionString
-    logAnalyticsWorkSpaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
     tags: commonTags
   }
 }
@@ -135,7 +135,7 @@ output resouceGroupName string = resourceGroup.name
 output appServiceHostname string = app.outputs.appServiceHostname
 
 @description('The name of the Key Vault for this environment.')
-output keyVaultName string = keyVault.outputsKeyVaultName
+output keyVaultName string = keyVault.outputs.keyVaultName
 
 @description('The name of the Application Insights instance for this environment.')
 output applicationInsightsName string = monitoring.outputs.applicationInsightsName
