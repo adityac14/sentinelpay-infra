@@ -49,7 +49,7 @@ param tags object
 // hyphens only. A deterministic 6-character suffix derived from the
 // subscription ID and environment prevents naming collisions across tenants
 // without producing a different name on every deploy.
-var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, environment), 0, 6)
+var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, environment), 0, 5)
 var keyVaultName = 'kv-${workload}-${environment}-${uniqueSuffix}'
 var keyVaultDiagnosticName = 'diag-kv-${workload}-${environment}'
 
