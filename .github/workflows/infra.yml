@@ -4,7 +4,8 @@
 # Deploys SentinelPay's Azure infrastructure via Bicep with OIDC authentication.
 #
 # Workflow:
-#   1. PR opened/updated  → validate Bicep + what-if preview against dev
+#   1. PR opened/updated  → validate Bicep + what-if preview against BOTH
+#                           dev and prod environments
 #   2. Merge to main      → deploy to dev automatically
 #   3. Manual approval     → deploy to prod (gated by GitHub environment reviewer)
 #
@@ -54,15 +55,19 @@ permissions:
 jobs:
   # ===========================================================================
   # Job 1: Validate and Preview
-  # Runs on every PR. Compiles the Bicep and runs what-if against dev to show
-  # what would change if the PR were merged.
+  # Runs on every PR. Compiles the Bicep and runs what-if against BOTH dev
+  # and prod environments to catch environment-specific issues (such as
+  # naming constraints) before they reach a real deployment.
   # ===========================================================================
   validate:
     name: Validate & What-If Preview
     runs-on: ubuntu-latest
     # Only run on PRs, not on push to main
     if: github.event_name == 'pull_request'
-    environment: dev 
+    # Environment is required for OIDC. The federated credentials only trust
+    # tokens scoped to a specific environment. Since what-if is a read-only
+    # operation, we use the dev environment here.
+    environment: dev
 
     steps:
       - name: Checkout code
@@ -75,25 +80,45 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Compile the Bicep to ARM JSON. Catches syntax errors, type mismatches,
+      # and missing parameter references before anything touches Azure.
       - name: Validate Bicep
         run: az bicep build --file main.bicep
 
+      # Preview what would change in the dev environment if this PR were merged.
+      # The output is saved to a file so it can be posted as a PR comment.
       - name: What-If Preview (Dev)
         run: |
           az deployment sub what-if \
             --location canadacentral \
             --template-file main.bicep \
             --parameters main.dev.bicepparam \
-            --no-pretty-print > what-if-output.txt 2>&1 || true
-          cat what-if-output.txt
+            --no-pretty-print > what-if-dev.txt 2>&1 || true
+          cat what-if-dev.txt
 
+      # Preview what would change in the prod environment. This catches
+      # environment-specific issues such as resource name length constraints
+      # where prod names are longer than dev names due to the extra character
+      # in "prod" vs "dev".
+      - name: What-If Preview (Prod)
+        run: |
+          az deployment sub what-if \
+            --location canadacentral \
+            --template-file main.bicep \
+            --parameters main.prod.bicepparam \
+            --no-pretty-print > what-if-prod.txt 2>&1 || true
+          cat what-if-prod.txt
+
+      # Post both what-if outputs as a single comment on the PR so reviewers
+      # can see the impact of the change on both environments before merging.
       - name: Post What-If to PR
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const output = fs.readFileSync('what-if-output.txt', 'utf8');
-            const body = `## What-If Preview (Dev Environment)\n\n\`\`\`\n${output.substring(0, 60000)}\n\`\`\`\n\n*Posted by GitHub Actions*`;
+            const dev = fs.readFileSync('what-if-dev.txt', 'utf8');
+            const prod = fs.readFileSync('what-if-prod.txt', 'utf8');
+            const body = `## What-If Preview\n\n### Dev Environment\n\`\`\`\n${dev.substring(0, 30000)}\n\`\`\`\n\n### Prod Environment\n\`\`\`\n${prod.substring(0, 30000)}\n\`\`\`\n\n*Posted by GitHub Actions*`;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
