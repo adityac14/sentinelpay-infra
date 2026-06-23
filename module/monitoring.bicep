@@ -128,7 +128,7 @@ output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.id
 @description('Name of the Log Analytics workspace.')
 output logAnalyticsWorkspaceName string = logAnalyticsWorkspace.name
 
-@description('Connection string for Application INsights. Injected into App Service app settings.')
+@description('Connection string for Application Insights. Injected into App Service app settings.')
 output applicationInsightsConnectionString string = applicationInsights.properties.ConnectionString
 
 @description('Name of the Application Insights instance.')
