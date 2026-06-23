@@ -71,7 +71,8 @@ param tags object
 // App Service names form a subdomain of azurewebsites.net so they must be
 // globally unique. A deterministic 6-character suffix derived from the
 // subscription ID and environment prevents collisions across tenants.
-var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, environment), 0, 5)
+var suffixLength = environment == 'prod' ? 4 : 5
+var uniqueSuffix = substring(uniqueString(subscription().subscriptionId, environment), 0, suffixLength)
 var appServicePlanName = 'asp-${workload}-${environment}'
 var appServiceName = 'app-${workload}-${environment}-${uniqueSuffix}'
 var appServiceDiagnosticName = 'diag-app-${workload}-${environment}'
